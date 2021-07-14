@@ -92,7 +92,7 @@ Match found in D:\\Codes\recommender\main.py
         Source lines: [4:9] matches to lines [4:9] in D:\\Codes\recommender - Copy\main.py
 
 Matches found in 3 files
-Search completed. Searched 4735 files. Ignored 219 files
+Search completed. Searched 828 directories and 4735 files. Ignored 219 files
 Ignored files with extensions: ['zip', 'jpg', 'mp4', 'mp3', 'png', 'h5', 'csv', 'dat']
 Time taken to search: 105.67sec
  ```

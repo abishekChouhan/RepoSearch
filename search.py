@@ -51,6 +51,7 @@ class RepoSearch(object):
         self.matches = {}
         self.workers = []
         self.file_count = 0
+        self.dir_count = 1
         self.ignored_file_count = 0
 
     def _find_match_in_file(self, curr_file):
@@ -64,8 +65,6 @@ class RepoSearch(object):
         n = len(self.source_file_data)
         m = len(curr_file_data)
         dp = [[0 for _ in range(m + 1)] for _ in range(n + 1)]
-        length = 0
-        position = (0, 0)
         for i in range(1, n + 1):
             for j in range(1, m + 1):
                 if self.source_file_data[i - 1] == curr_file_data[j - 1]:
@@ -74,9 +73,6 @@ class RepoSearch(object):
                     else:
                         dp[i][j] = 1 + dp[i - 1][j - 1]
                         dp[i - 1][j - 1] = 0
-                        if length < dp[i][j]:
-                            length = dp[i][j]
-                            position = (i, j)
                 else:
                     dp[i][j] = 0
         matches = []
@@ -103,6 +99,7 @@ class RepoSearch(object):
                 if item[0] != ".":
                     item_path = os.path.join(target_dir, item)
                     if os.path.isdir(item_path):
+                        self.dir_count += 1
                         dirs.append(item_path)
                     elif item_path.split('.')[-1].lower() in IGNORE_EXTENSIONS:
                         self.ignored_file_count += 1
@@ -143,10 +140,10 @@ class RepoSearch(object):
                 print(f'\nMatch found in {file_path}')
             for match in curr_matches:
                 if match[0] == len(self.source_file_data):
-                    print(f'\tFull source file matches with file: {file_path}', flush=True)
-                    break
-                print(f'\tSource lines: [{match[1] - match[0] + 1}:{match[1] + 1}] matches ' +
-                      f'to lines [{match[2] - match[0] + 1}:{match[2] + 1}] in {file_path}', flush=True)
+                    print(f'\tFull source file matches with file {file_path} at line #{match[2] - match[0] + 1}', flush=True)
+                else:
+                    print(f'\tSource lines: [{match[1] - match[0] + 1}:{match[1] + 1}] matches ' +
+                          f'to lines [{match[2] - match[0] + 1}:{match[2] + 1}] in {file_path}', flush=True)
 
     def stop_threads(self):
         for i in range(self.num_workers):
@@ -187,7 +184,8 @@ class RepoSearch(object):
             print('No match found')
         else:
             print(f'Matches found in {len(self.matches.keys())} files')
-        print(f'Search completed. Searched {self.file_count} files. Ignored {self.ignored_file_count} files')
+        print(f'Search completed. Searched {self.dir_count} directories and ' +
+              f'{self.file_count} files. Ignored {self.ignored_file_count} files')
         print(f'Ignored files with extensions: {IGNORE_EXTENSIONS}')
         print(f'Time taken to search: {round(time.monotonic()-st ,2)}sec')
 
