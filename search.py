@@ -1,8 +1,11 @@
 import os
 import sys
 import argparse
-import asyncio
-import hashlib
+import time
+from queue import Queue
+from threading import Thread
+
+IGNORE_EXTENSIONS = ['zip', 'jpg', 'mp4', 'mp3', 'png', 'h5', 'csv', 'dat']
 
 
 def get_args():
@@ -17,6 +20,8 @@ def get_args():
                       type=str, help='the path to repo')
     args.add_argument('-source_file', required=True,
                       type=str, help='the path to source file')
+    args.add_argument('-num_threads', required=False, default=4,
+                      type=int, help='Number of worker thread to run')
     args = args.parse_args()
     return args
 
@@ -30,44 +35,68 @@ class RepoSearch(object):
     Search the repository against a source file.
     '''
 
-    def __init__(self, repo_path, source_file):
+    def __init__(self, repo_path, source_file, num_workers=4):
         '''
         Constructor
         para:: repo_path: Path the repository where we need to search
         para:: source_file: Path to source file
+        para:: num_workers: Number of worker threads to run
         '''
         self.repo_path = repo_path
         self.source_file = source_file
         self.source_file_data = None
-        self.source_file_hash = None
+        self.queue = Queue(maxsize=1000)
+        self.num_workers = num_workers
+        self.stop_signal = '__stop__this__thread__'
+        self.matches = {}
+        self.workers = []
+        self.file_count = 0
+        self.ignored_file_count = 0
 
-    @staticmethod
-    def _get_hash(bytes_string):
-        hash_object = hashlib.sha256(bytes_string)
-        return hash_object.hexdigest()
-
-    def _is_match(self, item_file):
+    def _find_match_in_file(self, curr_file):
         '''
         Match one file against the source file
-        TO-DO: The functionality can be extended to search line by line using regex ('re' module)
+        Used dynamic programming for find command blocks of lines in the current file which matches the source file.
         '''
-        # Match by file size
-        try:
-            if os.path.getsize(self.source_file) != os.path.getsize(item_file):
-                return False
-        except OSError:
-            return False
+        with open(curr_file, 'r', encoding="utf-8", errors='replace') as file:
+            curr_file_data = file.readlines()
 
-        # Match SHA256
-        with open(item_file, 'r', encoding="utf-8", errors='replace') as file:
-            data = file.read().encode()
-            item_file_hash = RepoSearch._get_hash(data)
-        if self.source_file_hash != item_file_hash:
-            return False
-        return True
+        n = len(self.source_file_data)
+        m = len(curr_file_data)
+        dp = [[0 for _ in range(m + 1)] for _ in range(n + 1)]
+        length = 0
+        position = (0, 0)
+        for i in range(1, n + 1):
+            for j in range(1, m + 1):
+                if self.source_file_data[i - 1] == curr_file_data[j - 1]:
+                    if self.source_file_data[i - 1].strip() == '' and dp[i - 1][j - 1] == 0:
+                        dp[i][j] = 0
+                    else:
+                        dp[i][j] = 1 + dp[i - 1][j - 1]
+                        dp[i - 1][j - 1] = 0
+                        if length < dp[i][j]:
+                            length = dp[i][j]
+                            position = (i, j)
+                else:
+                    dp[i][j] = 0
+        matches = []
+        for i in range(n + 1):
+            for j in range(m + 1):
+                # only consider if match is of more than one line
+                if dp[i][j] > 1:
+                    matches.append((dp[i][j], i, j))
+        return matches
 
-    def _list_files_and_dirs(self, target_dir):
-        dirs, files = [], []
+    def _find_files_and_dirs(self, target_dir):
+        '''
+        For all the files in the target_dir,
+            Check:
+                1. If the file is not the source file
+                2. The file's extension is not in IGNORE_EXTENSIONS
+            if above two conditions are not true, push the file to self.queue
+        Return list of sub-directories of target_dir
+        '''
+        dirs = []
         try:
             for item in os.listdir(target_dir):
                 # ignore hidden dir
@@ -75,66 +104,97 @@ class RepoSearch(object):
                     item_path = os.path.join(target_dir, item)
                     if os.path.isdir(item_path):
                         dirs.append(item_path)
-                    else:
-                        if self._is_match(item_path):
-                            files.append(item_path)
+                    elif item_path.split('.')[-1].lower() in IGNORE_EXTENSIONS:
+                        self.ignored_file_count += 1
+                    elif item_path != self.source_file:
+                        self.file_count += 1
+                        self.queue.put(item_path)
         except PermissionError:
             raise RepoSearchException(f'Permission denied. Can\'t access directory `{target_dir}`.')
-        return dirs, files
+        return dirs
 
-    async def _rec_traverse_repo(self, target_dir):
+    def _rec_traverse_repo(self, target_dir):
         '''
         Generator
-        Recursively loop through the directories and search the match
-        Yields each file from bottom-up
+        Recursively loop through the directories and push the files to self.queue
         '''
         try:
-            dirs, files = self._list_files_and_dirs(target_dir)
+            dirs = self._find_files_and_dirs(target_dir)
             for _dir in dirs:
-                async for _file in self._rec_traverse_repo(_dir):
-                    yield _file
-
-            for _file in files:
-                yield _file
+                self._rec_traverse_repo(_dir)
         except RepoSearchException as err:
             print(err)
 
-    async def _search(self):
+    def _worker(self, thread_id):
+        while True:
+            if self.queue.empty():
+                time.sleep(0.001)
+            file_path = self.queue.get()
+            if self.stop_signal in file_path:
+                # If stop signal is for this `thread_id`, than break the loop else push the signal back to queue
+                if file_path == self.stop_signal + str(thread_id):
+                    break
+                else:
+                    self.queue.put(file_path)
+                continue
+            curr_matches = self._find_match_in_file(file_path)
+            if curr_matches:
+                self.matches[file_path] = curr_matches
+                print(f'\nMatch found in {file_path}')
+            for match in curr_matches:
+                if match[0] == len(self.source_file_data):
+                    print(f'\tFull source file matches with file: {file_path}', flush=True)
+                    break
+                print(f'\tSource lines: [{match[1] - match[0] + 1}:{match[1] + 1}] matches ' +
+                      f'to lines [{match[2] - match[0] + 1}:{match[2] + 1}] in {file_path}', flush=True)
+
+    def stop_threads(self):
+        for i in range(self.num_workers):
+            self.queue.put(self.stop_signal + str(i))
+        for i in range(self.num_workers):
+            self.workers[i].join()
+
+    def run(self):
         '''
-        Start search
+        Starts the async loop and search
         '''
         if not os.path.isfile(self.source_file):
             raise RepoSearchException(f'Source file `{self.source_file}` doesn\'t exist.')
         if not os.path.isdir(self.repo_path):
             raise RepoSearchException(f'Directory `{self.repo_path}` doesn\'t exist.')
         with open(self.source_file, 'r', encoding="utf-8", errors='replace') as src:
-            self.source_file_data = src.read()
+            self.source_file_data = src.readlines()
             if self.source_file_data == '':
                 raise RepoSearchException(f'Empty source file.')
-        self.source_file_hash = RepoSearch._get_hash(self.source_file_data.encode())
-        print('Matches: ')
-        match_found = False
-        async for i in self._rec_traverse_repo(self.repo_path):
-            if i != self.source_file:
-                match_found = True
-                print(f"\t{i}")
-        if not match_found:
-            print('No match found')
-
-    def run(self):
-        '''
-        Starts the async loop and search
-        '''
         try:
-            loop = asyncio.get_event_loop()
-            loop.run_until_complete(self._search())
-        except RepoSearchException as err:
-            raise RepoSearchException(err)
+            st = time.monotonic()
+            for i in range(self.num_workers):
+                self.workers.append(Thread(target=self._worker, args=(i,)))
+                self.workers[i].daemon = True
+                self.workers[i].start()
+            print(f'Number of worker thread: {self.num_workers}. Search Started..')
+            self._rec_traverse_repo(self.repo_path)
+            self.stop_threads()
+        except KeyboardInterrupt:
+            print('Stoping threads, please wait..')
+            while not self.queue.empty():
+                _ = self.queue.get()
+            self.stop_threads()
+            return
+
+        print()
+        if not self.matches:
+            print('No match found')
+        else:
+            print(f'Matches found in {len(self.matches.keys())} files')
+        print(f'Search completed. Searched {self.file_count} files. Ignored {self.ignored_file_count} files')
+        print(f'Ignored files with extensions: {IGNORE_EXTENSIONS}')
+        print(f'Time taken to search: {round(time.monotonic()-st ,2)}sec')
 
 
 if __name__ == '__main__':
     args = get_args()
-    search = RepoSearch(repo_path=args.repo_path, source_file=args.source_file)
+    search = RepoSearch(repo_path=args.repo_path, source_file=args.source_file, num_workers=args.num_threads)
     try:
         search.run()
     except RepoSearchException as err:
