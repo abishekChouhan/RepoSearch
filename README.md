@@ -62,8 +62,8 @@ Steps:
 
 
 ## Updated 14th July:
-1. Better approch implemented, using threads.
-2. Latest code is in `search.py`. Older code (async implemation) is in `search_old.py`.
+1. Better approach implemented, using threads.
+2. Latest code is in `search.py`. Older code (async implementation) is in `search_old.py`.
 3. Line by line matching added. Used Dynamic Programming for matching.
 4. Files with extensions `'zip', 'jpg', 'mp4', 'mp3', 'png', 'h5', 'csv', 'dat'` are ignored. Can be updated in code easily.
 5. Now the code can find matches for block of lines (block = more than one line).
@@ -96,8 +96,8 @@ Search completed. Searched 4735 files. Ignored 219 files
 Ignored files with extensions: ['zip', 'jpg', 'mp4', 'mp3', 'png', 'h5', 'csv', 'dat']
 Time taken to search: 105.67sec
  ```
-Explaination:
+Explanation:
 The output shows that matches are found in three files :-
 1. Full source file is matching with file `D:\\Codes\del_me.py`. That means content of both the files are same.
 2. Three matching blocks found in file `D:\\Codes\some_code_file.txt` i.e. line #9 to line #14 of the source file is matching with line #4 to line #9 of this file and so on.
-3. One matcing block is find in file  `D:\\Codes\recommender\main.py`
+3. One matching block is find in file  `D:\\Codes\recommender\main.py`
