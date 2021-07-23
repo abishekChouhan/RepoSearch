@@ -2,8 +2,13 @@ import os
 import sys
 import argparse
 import time
-from queue import Queue
-from threading import Thread
+# from queue import Queue
+# from threading import Thread, Lock
+
+## Using Multiprocessing module inplace of Multithreading. Because it is giving 4x performance
+from multiprocessing import Process as Thread
+from multiprocessing import Manager, Queue
+
 
 IGNORE_EXTENSIONS = ['zip', 'jpg', 'mp4', 'mp3', 'png', 'h5', 'csv', 'dat']
 
@@ -35,7 +40,7 @@ class RepoSearch(object):
     Search the repository against a source file.
     '''
 
-    def __init__(self, repo_path, source_file, num_workers=4):
+    def __init__(self, repo_path, source_file, num_workers=2):
         '''
         Constructor
         para:: repo_path: Path the repository where we need to search
@@ -45,10 +50,14 @@ class RepoSearch(object):
         self.repo_path = repo_path
         self.source_file = source_file
         self.source_file_data = None
-        self.queue = Queue(maxsize=1000)
+        self.queue = Queue()
         self.num_workers = num_workers
         self.stop_signal = '__stop__this__thread__'
-        self.matches = {}
+        if 'multiprocessing' in str(Thread):
+            manager = Manager()
+            self.matches = manager.dict()
+        else:
+            self.matches = {}
         self.workers = []
         self.file_count = 0
         self.dir_count = 1
@@ -118,6 +127,7 @@ class RepoSearch(object):
         try:
             dirs = self._find_files_and_dirs(target_dir)
             for _dir in dirs:
+                # print(f'Search in: {_dir}')
                 self._rec_traverse_repo(_dir)
         except RepoSearchException as err:
             print(err)
@@ -136,7 +146,7 @@ class RepoSearch(object):
                 continue
             curr_matches = self._find_match_in_file(file_path)
             if curr_matches:
-                self.matches[file_path] = curr_matches
+                self.matches[file_path] = curr_matches             
                 print(f'\nMatch found in {file_path}')
             for match in curr_matches:
                 if match[0] == len(self.source_file_data):
